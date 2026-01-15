@@ -1,137 +1,100 @@
-import { RequestHandler } from "express";
+import type { RequestHandler, Response } from "express";
+import createHttpError from "http-errors";
 
+import * as authService from "../services/authService.js";
+import type { UserDocument } from "../database/models/user.js";
 
-import * as authServices from "../services/authService.js";
-import { ONE_DAY, ONE_MONTH } from "../helpers/constants.js";
-
-export const registerUserController: RequestHandler = async (req, res, next) => {
-  try {
-    const { email, password, group } = req.body as {
-      email: string;
-      password: string;
-      group?: string;
-    };
-
-    const result = await authServices.registerUserService({
-      email,
-      password,
-      group,
-    });
-
-    res.status(201).json(result);
-  } catch (err) {
-    next(err);
-  }
+const REFRESH_COOKIE_NAME = "refreshToken";
+const REFRESH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "strict" as const,
+  maxAge: authService.REFRESH_TOKEN_MAX_AGE_MS,
+  path: "/",
 };
 
-export const loginController: RequestHandler = async (req, res, next) => {
-  try {
-    const { email, password } = req.body as { email: string; password: string };
+const formatUser = (user: UserDocument) => ({
+  id: user._id.toString(),
+  name: user.name,
+  email: user.email,
+  typeAccount: user.typeAccount,
+});
 
-    const session = await authServices.loginService({ email, password });
-
-    res.cookie("refreshToken", session.refreshToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-      maxAge: ONE_MONTH,
-    });
-
-    res.cookie("accessToken", session.accessToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-      maxAge: ONE_DAY,
-    });
-
-    res.cookie("sessionId", session.idToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-      maxAge: ONE_DAY,
-    });
-
-    res.status(200).json({ accessToken: session.accessToken });
-  } catch (err) {
-    next(err);
-  }
+const attachRefreshCookie = (res: Response, token: string) => {
+  res.cookie(REFRESH_COOKIE_NAME, token, REFRESH_COOKIE_OPTIONS);
 };
 
-export const logoutController: RequestHandler = async (_req, res, next) => {
-  try {
-    await authServices.logoutService();
+export const registerUserController: RequestHandler = async (req, res) => {
+  const { email, password, name, typeAccount } = req.body;
 
-    res.clearCookie("refreshToken");
-    res.clearCookie("accessToken");
-    res.clearCookie("sessionId");
-
-    res.status(200).json({ message: "Logged out successfully!" });
-  } catch (err) {
-    next(err);
+  if (!email || !password || !name) {
+    throw createHttpError(400, "Email, name, and password are required.");
   }
+
+  const { accessToken, refreshToken, user } = await authService.registerUser({
+    email,
+    name,
+    password,
+    typeAccount,
+  });
+
+  attachRefreshCookie(res, refreshToken);
+  res.status(201).json({
+    accessToken,
+    user: formatUser(user),
+  });
 };
 
-export const refreshController: RequestHandler = async (_req, res, next) => {
-  try {
-    const session = await authServices.refreshService();
+export const loginController: RequestHandler = async (req, res) => {
+  const { email, password } = req.body;
 
-    res.cookie("refreshToken", session.refreshToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-      maxAge: ONE_MONTH,
-    });
-
-    res.cookie("accessToken", session.accessToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-      maxAge: ONE_DAY,
-    });
-
-    res.cookie("sessionId", session.idToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-      maxAge: ONE_DAY,
-    });
-
-    res.status(200).json({ accessToken: session.accessToken });
-  } catch (err) {
-    next(err);
+  if (!email || !password) {
+    throw createHttpError(400, "Email and password are required.");
   }
+
+  const { accessToken, refreshToken, user } = await authService.loginUser(
+    email,
+    password
+  );
+
+  attachRefreshCookie(res, refreshToken);
+  res.status(200).json({
+    accessToken,
+    user: formatUser(user),
+  });
 };
 
-export const requestResetEmailController: RequestHandler = async (req, res, next) => {
-  try {
-    const { email } = req.body as { email: string };
-    await authServices.requestResetEmailService(email);
-    res.status(200).json({ message: "Password reset email sent" });
-  } catch (err) {
-    next(err);
+export const refreshController: RequestHandler = async (req, res) => {
+  const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
+
+  if (!refreshToken) {
+    throw createHttpError(401, "Refresh token is missing.");
   }
+
+  const { accessToken, refreshToken: newToken, user } =
+    await authService.refreshTokens(refreshToken);
+
+  attachRefreshCookie(res, newToken);
+  res.status(200).json({
+    accessToken,
+    user: formatUser(user),
+  });
 };
 
-export const resetPasswordController: RequestHandler = async (req, res, next) => {
-  try {
-    const { email, code, newPassword } = req.body as {
-      email: string;
-      code: string;
-      newPassword: string;
-    };
-    await authServices.resetPasswordService({ email, code, newPassword });
-    res.status(200).json({ message: "Password successfully reset" });
-  } catch (err) {
-    next(err);
-  }
+export const logoutController: RequestHandler = async (req, res) => {
+  const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
+
+  await authService.logoutUser(refreshToken);
+  res.clearCookie(REFRESH_COOKIE_NAME, { path: "/" });
+  res.status(204).end();
 };
 
-export const confirmEmailController: RequestHandler = async (req, res, next) => {
-  try {
-    const { email, code } = req.body as { email: string; code: string };
-    await authServices.confirmEmailService({ email, code });
-    res.status(200).json({ message: "Email confirmed successfully!" });
-  } catch (err) {
-    next(err);
+export const getMeController: RequestHandler = async (req, res) => {
+  if (!req.user) {
+    throw createHttpError(401, "Not authenticated");
   }
+
+  res.status(200).json({
+    user: formatUser(req.user),
+  });
 };

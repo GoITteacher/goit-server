@@ -70,3 +70,12 @@ export const deleteNews = async (newsId: string) => {
     throw new Error("Error deleting news: " + message);
   }
 };
+
+export const getNewsById = async (newsId: string) => {
+  try {
+    return await NewsCollection.findById(newsId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    throw new Error("Error fetching news by id: " + message);
+  }
+};

@@ -1,234 +1,149 @@
-import AWS from "aws-sdk";
-import {
-  AuthenticationDetails,
-  CognitoUser,
-  CognitoUserAttribute,
-  CognitoUserPool,
-  CognitoUserSession,
-} from "amazon-cognito-identity-js";
+import crypto from "crypto";
+import * as jwt from "jsonwebtoken";
+import type { JwtPayload, SignOptions } from "jsonwebtoken";
+import createHttpError from "http-errors";
 
-import { CLIENT_ID, USER_POOL_ID } from "../helpers/constants.js";
-import { createUser } from "./userService.js";
+import { UserCollection, type UserDocument } from "../database/models/user.js";
+import { env } from "../utils/env.js";
 
-const poolData = {
-  UserPoolId: USER_POOL_ID,
-  ClientId: CLIENT_ID,
+const ACCESS_TOKEN_SECRET = env("ACCESS_TOKEN_SECRET", "demo-access-secret");
+const ACCESS_TOKEN_EXPIRES_IN = env("ACCESS_TOKEN_EXPIRES_IN", "15m");
+export const REFRESH_TOKEN_MAX_AGE_MS = Number(
+  env("REFRESH_TOKEN_MAX_AGE_MS", String(1000 * 60 * 60 * 24 * 7))
+);
+
+export type AccessTokenPayload = {
+  sub: string;
+  email: string;
+  typeAccount: string;
 };
 
-const userPool = new CognitoUserPool(poolData);
-const cognito = new AWS.CognitoIdentityServiceProvider();
-
-const getCognitoUser = (email: string) => {
-  return new CognitoUser({
-    Username: email,
-    Pool: userPool,
-  });
-};
-
-const getAuthDetails = (email: string, password: string) => {
-  return new AuthenticationDetails({
-    Username: email,
-    Password: password,
-  });
-};
-
-export type AuthSession = {
+export type AuthResult = {
   accessToken: string;
-  idToken: string;
   refreshToken: string;
+  user: UserDocument;
 };
 
-type RegisterPayload = {
+interface RegisterUserPayload {
   email: string;
+  name: string;
   password: string;
-  group?: string;
+  typeAccount?: string;
+}
+
+const hashPassword = (value: string) => {
+  return crypto.createHash("sha256").update(value).digest("hex");
 };
 
-type LoginPayload = {
-  email: string;
-  password: string;
+const createAccessToken = (user: UserDocument) => {
+  const options: SignOptions = {
+    expiresIn: ACCESS_TOKEN_EXPIRES_IN as SignOptions["expiresIn"],
+  };
+
+  return jwt.sign(
+    {
+      sub: user._id.toString(),
+      email: user.email,
+      typeAccount: user.typeAccount,
+    },
+    ACCESS_TOKEN_SECRET,
+    options
+  );
 };
 
-type ResetPasswordPayload = {
-  email: string;
-  code: string;
-  newPassword: string;
+const createRefreshToken = () => crypto.randomUUID();
+
+const buildAuthResult = async (user: UserDocument): Promise<AuthResult> => {
+  const refreshToken = createRefreshToken();
+  user.refreshToken = refreshToken;
+  const updatedUser = await user.save();
+
+  return {
+    accessToken: createAccessToken(updatedUser),
+    refreshToken,
+    user: updatedUser,
+  };
 };
 
-type ConfirmEmailPayload = {
-  email: string;
-  code: string;
-};
-
-export const registerUserService = async ({
+export const registerUser = async ({
   email,
+  name,
   password,
-  group,
-}: RegisterPayload) => {
-  return new Promise<{ message: string; userSub: string }>((resolve, reject) => {
-    const attributeList = [
-      new CognitoUserAttribute({
-        Name: "email",
-        Value: email,
-      }),
-    ];
+  typeAccount,
+}: RegisterUserPayload): Promise<AuthResult> => {
+  const normalizedEmail = email.trim().toLowerCase();
+  const existingUser = await UserCollection.findOne({ email: normalizedEmail });
 
-    userPool.signUp(email, password, attributeList, [], (err, result) => {
-      if (err || !result?.userSub) {
-        return reject(err ?? new Error("Failed to register user"));
-      }
-
-      const userSub = result.userSub;
-
-      if (group) {
-        cognito
-          .adminAddUserToGroup({
-            UserPoolId: USER_POOL_ID,
-            Username: email,
-            GroupName: group,
-          })
-          .promise()
-          .then(async () => {
-            await createUser({
-              nickname: email,
-              password,
-              cognitoSub: userSub,
-            });
-            resolve({ message: "User registered and added to group", userSub });
-          })
-          .catch((groupError) => {
-            console.error("Помилка додавання до групи:", groupError);
-            reject(groupError);
-          });
-      } else {
-        resolve({ message: "User registered successfully", userSub });
-      }
-    });
-  });
-};
-
-export const loginService = async ({ email, password }: LoginPayload): Promise<AuthSession> => {
-  return new Promise<AuthSession>((resolve, reject) => {
-    getCognitoUser(email).authenticateUser(getAuthDetails(email, password), {
-      onSuccess: (result) => {
-        resolve({
-          accessToken: result.getAccessToken().getJwtToken(),
-          idToken: result.getIdToken().getJwtToken(),
-          refreshToken: result.getRefreshToken().getToken(),
-        });
-      },
-      onFailure: (err) => {
-        console.log("Login Service error", err);
-        reject(err);
-      },
-    });
-  });
-};
-
-export const logoutService = async () => {
-  return new Promise<{ message: string }>((resolve, reject) => {
-    try {
-      const currentUser = userPool.getCurrentUser();
-      if (!currentUser) {
-        return resolve({ message: "User already logged out" });
-      }
-      currentUser.signOut();
-      resolve({ message: "Logged out successfully" });
-    } catch (err) {
-      reject(err);
-    }
-  });
-};
-
-export const refreshService = async (): Promise<AuthSession> => {
-  return new Promise<AuthSession>((resolve, reject) => {
-    const currentUser = userPool.getCurrentUser();
-    if (!currentUser) {
-      return reject(new Error("No user logged in"));
-    }
-
-    currentUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
-      if (err || !session?.isValid()) {
-        return reject(new Error("Session is invalid or expired"));
-      }
-
-      currentUser.refreshSession(
-        session.getRefreshToken(),
-        (refreshErr: Error | null, newSession: CognitoUserSession | null) => {
-          if (refreshErr || !newSession) {
-            return reject(refreshErr ?? new Error("Failed to refresh session"));
-          }
-          resolve({
-            accessToken: newSession.getAccessToken().getJwtToken(),
-            idToken: newSession.getIdToken().getJwtToken(),
-            refreshToken: newSession.getRefreshToken().getToken(),
-          });
-        }
-      );
-    });
-  });
-};
-
-export const requestResetEmailService = async (email: string) => {
-  return new Promise<{ message: string }>((resolve, reject) => {
-    const cognitoUser = getCognitoUser(email);
-    cognitoUser.forgotPassword({
-      onSuccess: () => resolve({ message: "Password reset email sent" }),
-      onFailure: (err) => reject(err),
-    });
-  });
-};
-
-export const resetPasswordService = async ({ email, code, newPassword }: ResetPasswordPayload) => {
-  return new Promise<{ message: string }>((resolve, reject) => {
-    const cognitoUser = getCognitoUser(email);
-    cognitoUser.confirmPassword(code, newPassword, {
-      onSuccess: () => resolve({ message: "Password successfully reset" }),
-      onFailure: (err) => reject(err),
-    });
-  });
-};
-
-export const confirmEmailService = async ({ email, code }: ConfirmEmailPayload) => {
-  return new Promise<{ message: string; result: string | undefined }>((resolve, reject) => {
-    const cognitoUser = getCognitoUser(email);
-    cognitoUser.confirmRegistration(code, true, (err, result) => {
-      if (err) {
-        return reject(err);
-      }
-      resolve({ message: "Email successfully confirmed", result });
-    });
-  });
-};
-
-export const disableUserService = async (email: string) => {
-  try {
-    await cognito
-      .adminDisableUser({
-        UserPoolId: USER_POOL_ID,
-        Username: email,
-      })
-      .promise();
-
-    return { message: "User has been disabled successfully" };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    throw new Error(`Failed to disable user: ${message}`);
+  if (existingUser) {
+    throw createHttpError(409, "Email has already been registered");
   }
+
+  const user = await UserCollection.create({
+    email: normalizedEmail,
+    name,
+    passwordHash: hashPassword(password),
+    typeAccount: typeAccount ?? "freeUser",
+  });
+
+  return buildAuthResult(user);
 };
 
-export const enableUserService = async (email: string) => {
-  try {
-    await cognito
-      .adminEnableUser({
-        UserPoolId: USER_POOL_ID,
-        Username: email,
-      })
-      .promise();
+export const loginUser = async (
+  email: string,
+  password: string
+): Promise<AuthResult> => {
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = await UserCollection.findOne({ email: normalizedEmail });
 
-    return { message: "User has been enabled successfully" };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    throw new Error(`Failed to enable user: ${message}`);
+  if (!user || user.passwordHash !== hashPassword(password)) {
+    throw createHttpError(401, "Invalid email or password");
+  }
+
+  return buildAuthResult(user);
+};
+
+export const refreshTokens = async (refreshToken: string): Promise<AuthResult> => {
+  if (!refreshToken) {
+    throw createHttpError(401, "Missing refresh token");
+  }
+
+  const user = await UserCollection.findOne({ refreshToken });
+  if (!user) {
+    throw createHttpError(401, "Refresh token is invalid");
+  }
+
+  return buildAuthResult(user);
+};
+
+export const logoutUser = async (refreshToken?: string) => {
+  if (!refreshToken) {
+    return;
+  }
+
+  await UserCollection.findOneAndUpdate(
+    { refreshToken },
+    { $unset: { refreshToken: "" } }
+  );
+};
+
+export const verifyAccessToken = (token: string): AccessTokenPayload => {
+  try {
+    const payload = jwt.verify(token, ACCESS_TOKEN_SECRET) as JwtPayload;
+
+    if (
+      typeof payload.sub !== "string" ||
+      typeof payload.email !== "string" ||
+      typeof payload.typeAccount !== "string"
+    ) {
+      throw new Error("Access token is malformed");
+    }
+
+    return {
+      sub: payload.sub,
+      email: payload.email,
+      typeAccount: payload.typeAccount,
+    };
+  } catch (error) {
+    throw createHttpError(401, "Invalid or expired access token");
   }
 };

@@ -1,40 +1,29 @@
-import { CognitoJwtVerifier } from "aws-jwt-verify";
-import type { CognitoAccessTokenPayload } from "aws-jwt-verify/jwt-model";
-import createHttpError from "http-errors";
 import type { RequestHandler } from "express";
+import createHttpError from "http-errors";
 
-import { CLIENT_ID, USER_POOL_ID } from "../helpers/constants.js";
-import { getUserByCognito } from "../services/userService.js";
-
-const verifier = CognitoJwtVerifier.create({
-  userPoolId: USER_POOL_ID,
-  tokenUse: "access",
-  clientId: CLIENT_ID,
-});
+import { UserCollection } from "../database/models/user.js";
+import { verifyAccessToken } from "../services/authService.js";
 
 export const authenticate: RequestHandler = async (req, _res, next) => {
   try {
-    const authHeader = req.headers["authorization"];
-
-    if (!authHeader) {
-      return next(createHttpError(401, "Please provide Authorization header"));
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      throw createHttpError(401, "Access token is missing");
     }
 
-    const [bearer, token] = authHeader.split(" ");
+    const token = authHeader.slice(7);
+    const payload = verifyAccessToken(token);
 
-    if (bearer !== "Bearer" || !token) {
-      return next(createHttpError(401, "Auth header should be of type Bearer"));
+    const user = await UserCollection.findById(payload.sub);
+    if (!user) {
+      throw createHttpError(401, "User not found");
     }
-
-    const payload = (await verifier.verify(token)) as CognitoAccessTokenPayload;
-    const user = await getUserByCognito(payload.sub);
 
     req.user = user;
-    req.typeAccount = payload["cognito:groups"]?.[0] ?? null;
+    req.typeAccount = user.typeAccount ?? null;
 
     next();
-  } catch (err) {
-    console.error("JWT Verification error:", err);
-    return next(createHttpError(401, "Invalid token"));
+  } catch (error) {
+    next(error);
   }
 };
