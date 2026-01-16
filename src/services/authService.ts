@@ -1,15 +1,14 @@
-import crypto from "crypto";
-import * as jwt from "jsonwebtoken";
-import type { JwtPayload, SignOptions } from "jsonwebtoken";
-import createHttpError from "http-errors";
+import crypto from 'crypto';
+import jwt, { type JwtPayload, type SignOptions } from 'jsonwebtoken';
+import createHttpError from 'http-errors';
 
-import { UserCollection, type UserDocument } from "../database/models/user.js";
-import { env } from "../utils/env.js";
+import { UserCollection, type UserDocument } from '../database/models/user.js';
+import { env } from '../utils/env.js';
 
-const ACCESS_TOKEN_SECRET = env("ACCESS_TOKEN_SECRET", "demo-access-secret");
-const ACCESS_TOKEN_EXPIRES_IN = env("ACCESS_TOKEN_EXPIRES_IN", "15m");
+const ACCESS_TOKEN_SECRET = env('ACCESS_TOKEN_SECRET', 'demo-access-secret');
+const ACCESS_TOKEN_EXPIRES_IN = env('ACCESS_TOKEN_EXPIRES_IN', '15m');
 export const REFRESH_TOKEN_MAX_AGE_MS = Number(
-  env("REFRESH_TOKEN_MAX_AGE_MS", String(1000 * 60 * 60 * 24 * 7))
+  env('REFRESH_TOKEN_MAX_AGE_MS', String(1000 * 60 * 60 * 24 * 7)),
 );
 
 export type AccessTokenPayload = {
@@ -32,12 +31,12 @@ interface RegisterUserPayload {
 }
 
 const hashPassword = (value: string) => {
-  return crypto.createHash("sha256").update(value).digest("hex");
+  return crypto.createHash('sha256').update(value).digest('hex');
 };
 
 const createAccessToken = (user: UserDocument) => {
   const options: SignOptions = {
-    expiresIn: ACCESS_TOKEN_EXPIRES_IN as SignOptions["expiresIn"],
+    expiresIn: ACCESS_TOKEN_EXPIRES_IN as SignOptions['expiresIn'],
   };
 
   return jwt.sign(
@@ -47,7 +46,7 @@ const createAccessToken = (user: UserDocument) => {
       typeAccount: user.typeAccount,
     },
     ACCESS_TOKEN_SECRET,
-    options
+    options,
   );
 };
 
@@ -75,14 +74,14 @@ export const registerUser = async ({
   const existingUser = await UserCollection.findOne({ email: normalizedEmail });
 
   if (existingUser) {
-    throw createHttpError(409, "Email has already been registered");
+    throw createHttpError(409, 'Email has already been registered');
   }
 
   const user = await UserCollection.create({
     email: normalizedEmail,
     name,
     passwordHash: hashPassword(password),
-    typeAccount: typeAccount ?? "freeUser",
+    typeAccount: typeAccount ?? 'freeUser',
   });
 
   return buildAuthResult(user);
@@ -90,26 +89,28 @@ export const registerUser = async ({
 
 export const loginUser = async (
   email: string,
-  password: string
+  password: string,
 ): Promise<AuthResult> => {
   const normalizedEmail = email.trim().toLowerCase();
   const user = await UserCollection.findOne({ email: normalizedEmail });
 
   if (!user || user.passwordHash !== hashPassword(password)) {
-    throw createHttpError(401, "Invalid email or password");
+    throw createHttpError(401, 'Invalid email or password');
   }
 
   return buildAuthResult(user);
 };
 
-export const refreshTokens = async (refreshToken: string): Promise<AuthResult> => {
+export const refreshTokens = async (
+  refreshToken: string,
+): Promise<AuthResult> => {
   if (!refreshToken) {
-    throw createHttpError(401, "Missing refresh token");
+    throw createHttpError(401, 'Missing refresh token');
   }
 
   const user = await UserCollection.findOne({ refreshToken });
   if (!user) {
-    throw createHttpError(401, "Refresh token is invalid");
+    throw createHttpError(401, 'Refresh token is invalid');
   }
 
   return buildAuthResult(user);
@@ -122,7 +123,7 @@ export const logoutUser = async (refreshToken?: string) => {
 
   await UserCollection.findOneAndUpdate(
     { refreshToken },
-    { $unset: { refreshToken: "" } }
+    { $unset: { refreshToken: '' } },
   );
 };
 
@@ -131,11 +132,11 @@ export const verifyAccessToken = (token: string): AccessTokenPayload => {
     const payload = jwt.verify(token, ACCESS_TOKEN_SECRET) as JwtPayload;
 
     if (
-      typeof payload.sub !== "string" ||
-      typeof payload.email !== "string" ||
-      typeof payload.typeAccount !== "string"
+      typeof payload.sub !== 'string' ||
+      typeof payload.email !== 'string' ||
+      typeof payload.typeAccount !== 'string'
     ) {
-      throw new Error("Access token is malformed");
+      throw new Error('Access token is malformed');
     }
 
     return {
@@ -144,6 +145,6 @@ export const verifyAccessToken = (token: string): AccessTokenPayload => {
       typeAccount: payload.typeAccount,
     };
   } catch (error) {
-    throw createHttpError(401, "Invalid or expired access token");
+    throw createHttpError(401, 'Invalid or expired access token');
   }
 };

@@ -5,11 +5,20 @@ import * as authService from "../services/authService.js";
 import type { UserDocument } from "../database/models/user.js";
 
 const REFRESH_COOKIE_NAME = "refreshToken";
+const ACCESS_COOKIE_NAME = "accessToken";
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: "strict" as const,
   maxAge: authService.REFRESH_TOKEN_MAX_AGE_MS,
+  path: "/",
+};
+
+const ACCESS_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "strict" as const,
+  maxAge: 15 * 60 * 1000,
   path: "/",
 };
 
@@ -22,6 +31,10 @@ const formatUser = (user: UserDocument) => ({
 
 const attachRefreshCookie = (res: Response, token: string) => {
   res.cookie(REFRESH_COOKIE_NAME, token, REFRESH_COOKIE_OPTIONS);
+};
+
+const attachAccessCookie = (res: Response, token: string) => {
+  res.cookie(ACCESS_COOKIE_NAME, token, ACCESS_COOKIE_OPTIONS);
 };
 
 export const registerUserController: RequestHandler = async (req, res) => {
@@ -39,6 +52,7 @@ export const registerUserController: RequestHandler = async (req, res) => {
   });
 
   attachRefreshCookie(res, refreshToken);
+  attachAccessCookie(res, accessToken);
   res.status(201).json({
     accessToken,
     user: formatUser(user),
@@ -58,6 +72,7 @@ export const loginController: RequestHandler = async (req, res) => {
   );
 
   attachRefreshCookie(res, refreshToken);
+  attachAccessCookie(res, accessToken);
   res.status(200).json({
     accessToken,
     user: formatUser(user),
@@ -75,6 +90,7 @@ export const refreshController: RequestHandler = async (req, res) => {
     await authService.refreshTokens(refreshToken);
 
   attachRefreshCookie(res, newToken);
+  attachAccessCookie(res, accessToken);
   res.status(200).json({
     accessToken,
     user: formatUser(user),
@@ -86,6 +102,7 @@ export const logoutController: RequestHandler = async (req, res) => {
 
   await authService.logoutUser(refreshToken);
   res.clearCookie(REFRESH_COOKIE_NAME, { path: "/" });
+  res.clearCookie(ACCESS_COOKIE_NAME, { path: "/" });
   res.status(204).end();
 };
 

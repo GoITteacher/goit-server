@@ -1,85 +1,174 @@
-<!--
-title: 'Serverless Framework Node Express API on AWS'
-description: 'This template demonstrates how to develop and deploy a simple Node Express API running on AWS Lambda using the Serverless Framework.'
-layout: Doc
-framework: v4
-platform: AWS
-language: nodeJS
-priority: 1
-authorLink: 'https://github.com/serverless'
-authorName: 'Serverless, Inc.'
-authorAvatar: 'https://avatars1.githubusercontent.com/u/13742415?s=200&v=4'
--->
+# Simple Cookie-Based Auth Demo Server
 
-# Serverless Framework Node Express API on AWS
+This project is a minimal Express + MongoDB sample that shows how cookie-based
+authentication works along with protected resources like **news posts**,
+**tasks**, and **notes**. Every mutable endpoint is gated behind a JWT access
+token, while refresh tokens are issued via an HttpOnly+SameSite=Strict cookie.
 
-This template demonstrates how to develop and deploy a simple Node Express API service running on AWS Lambda using the Serverless Framework.
+## Quick start
 
-This template configures a single function, `api`, which is responsible for handling all incoming requests using the `httpApi` event. To learn more about `httpApi` event configuration options, please refer to [httpApi event docs](https://www.serverless.com/framework/docs/providers/aws/events/http-api/). As the event is configured in a way to accept all incoming requests, the Express.js framework is responsible for routing and handling requests internally. This implementation uses the `serverless-http` package to transform the incoming event request payloads to payloads compatible with Express.js. To learn more about `serverless-http`, please refer to the [serverless-http README](https://github.com/dougmoscrop/serverless-http).
+1. Copy `.env` from the example (if any) and fill in one of your MongoDB URIs
+   plus the optional JWT secrets.
+2. Run `npm install`.
+3. Start in dev mode with `npm run dev` (Hot reload) or `npm run build` +
+   `npm start`.
 
-## Usage
+Cookies require HTTPS in production, so run locally over `http://localhost:3001`
+and disable secure cookies by leaving `NODE_ENV` unset.
 
-### Deployment
+## Configuration
 
-Install dependencies with:
+| Variable                   | Purpose                                           | Default              |
+| -------------------------- | ------------------------------------------------- | -------------------- |
+| `MONGODB_*`                | Database connection                               | See `.env`           |
+| `ACCESS_TOKEN_SECRET`      | Secret used to sign short-lived JWT access tokens | `demo-access-secret` |
+| `ACCESS_TOKEN_EXPIRES_IN`  | JWT lifespan (expressed as `15m`, `1h`, etc.)     | `15m`                |
+| `REFRESH_TOKEN_MAX_AGE_MS` | Cookie lifespan for refresh tokens                | 1 week               |
+| `PORT`                     | HTTP port                                         | `3001`               |
 
-```
-npm install
-```
+## Authentication overview
 
-and then deploy with:
+1. The client registers or logs in. The response body contains an `accessToken`
+   (JWT) and `user` object, while a `refreshToken` cookie is issued.
+2. For protected requests (`/news`, `/tasks`, `/notes`), the client attaches the
+   `Authorization: Bearer <accessToken>` header.
+3. When the access token expires, hit `POST /api/auth/refresh` (the cookie is
+   sent automatically) to receive a new access token and refreshed cookie.
+4. `POST /api/auth/logout` clears the refresh cookie + server-side token.
 
-```
-serverless deploy
-```
+Access tokens are signed with `ACCESS_TOKEN_SECRET` and expire quickly; refresh
+tokens are UUIDs stored in the user record and rotated on every refresh.
 
-After running deploy, you should see output similar to:
+## API Reference
 
-```
-Deploying "aws-node-express-api" to stage "dev" (us-east-1)
+All endpoints are mounted under `/api` when running via Serverless; in
+development they are direct Express routes.
 
-✔ Service deployed to stack aws-node-express-api-dev (96s)
+---
 
-endpoint: ANY - https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com
-functions:
-  api: aws-node-express-api-dev-api (2.3 kB)
-```
+### Auth (/auth)
 
-_Note_: In current form, after deployment, your API is public and can be invoked by anyone. For production deployments, you might want to configure an authorizer. For details on how to do that, refer to [`httpApi` event docs](https://www.serverless.com/framework/docs/providers/aws/events/http-api/).
+#### `POST /auth/register`
 
-### Invocation
+Creates a new user.
 
-After successful deployment, you can call the created application via HTTP:
+- **Body**:
+  `{ "email": string, "name": string, "password": string, "typeAccount"?: "freeUser" | "paidUser" | "agencyUser" }`
+- **Response**: `201`
+  `{ "accessToken": string, "user": { id, name, email, typeAccount } }`
+- **Cookies**: `refreshToken`, `accessToken` (HttpOnly, SameSite=Strict)
 
-```
-curl https://xxxxxxx.execute-api.us-east-1.amazonaws.com/
-```
+#### `POST /auth/login`
 
-Which should result in the following response:
+Existing users get access + refresh tokens.
 
-```json
-{ "message": "Hello from root!" }
-```
+- **Body**: `{ "email": string, "password": string }`
+- **Response**: `200` same as register.
+- **Cookies**: `refreshToken`, `accessToken` (rotated on every login; HttpOnly)
 
-### Local development
+#### `POST /auth/refresh`
 
-The easiest way to develop and test your function is to use the `dev` command:
+Uses the `refreshToken` cookie to issue a fresh access token.
 
-```
-serverless dev
-```
+- **Response**: `200` `{ "accessToken": string, "user": { ... } }`
+- **Cookies**: new `refreshToken`, new `accessToken`.
 
-This will start a local emulator of AWS Lambda and tunnel your requests to and from AWS Lambda, allowing you to interact with your function as if it were running in the cloud.
+#### `POST /auth/logout`
 
-Now you can invoke the function as before, but this time the function will be executed locally. Now you can develop your function locally, invoke it, and see the results immediately without having to re-deploy.
+Clears the refresh token server-side and removes the cookie.
 
-When you are done developing, don't forget to run `serverless deploy` to deploy the function to the cloud.
+- **Response**: `204`
 
-### Setup AWS CLI
+#### `GET /auth/me`
 
-In terminal paste this command:
-```bash
-aws configure --profile yourProfileName
-export AWS_PROFILE = yourProfileName
-npm install serverless -g
-```
+Returns the currently authenticated user.
+
+- **Headers**: `Authorization: Bearer <accessToken>`
+- **Response**: `200` `{ "user": { ... } }`
+
+---
+
+### News (/news)
+
+All news endpoints require the bearer token in the header.
+
+#### `POST /news`
+
+- **Body**:
+  `{ topic, text, type: "updates"|"news"|"testimonials"|"video stories", typeAccount: "freeUser"|"paidUser"|"agencyUser" }`
+- **Response**: `201` created news.
+- The logged-in user ID is inferred from the token.
+
+#### `GET /news`
+
+- **Query**: pagination (`page`, `perPage`), `topic`, `type`, `typeAccount`,
+  `userId`.
+- **Response**: `200` `{ pagination data, news: [...] }`
+- Returns items created by the authenticated user only.
+
+#### `DELETE /news/:newsId`
+
+- Removes your own news post.
+- **Response**: `200` deleted document.
+
+---
+
+### Tasks (/tasks)
+
+Protected by authentication.
+
+#### `GET /tasks`
+
+- **Response**: `200` `{ tasks: Task[] }`
+
+#### `POST /tasks`
+
+- **Body**:
+  `{ "title": string, "description"?: string, "status"?: "todo"|"in-progress"|"done", "dueDate"?: ISOString }`
+- **Response**: `201` `{ task }` The `userId` is always the current user.
+
+#### `GET /tasks/:taskId`
+
+- **Response**: `200` `{ task }`
+
+#### `PATCH /tasks/:taskId`
+
+- **Body**: only supplied fields are updated (`title`, `description`, `status`,
+  `dueDate`).
+- **Response**: `200` updated task data.
+
+#### `DELETE /tasks/:taskId`
+
+- **Response**: `204`
+
+---
+
+### Notes (/notes)
+
+Protected resource for simple note-taking.
+
+#### `GET /notes`
+
+- **Response**: `200` `{ notes: Note[] }`
+
+#### `POST /notes`
+
+- **Body**:
+  `{ "title": string, "content": string, "tags"?: string[], "archived"?: boolean }`
+- **Response**: `201` `{ note }`
+
+#### `GET /notes/:noteId`
+
+- **Response**: `200` `{ note }`
+
+#### `PATCH /notes/:noteId`
+
+- **Body**: allow updating `title`, `content`, `tags`, `archived`.
+- **Response**: `200` updated note.
+
+#### `DELETE /notes/:noteId`
+
+- **Response**: `204`
+
+Both tasks and notes endpoints only operate on documents that belong to the
+authenticated user.
