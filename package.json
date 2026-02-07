@@ -6,6 +6,7 @@
     "dev": "nodemon --watch src --ext ts --exec \"ts-node --esm\" src/index.ts",
     "build": "tsc",
     "start": "npm run build && node dist/index.js",
+    "seed": "ts-node --esm scripts/seedData.ts",
     "push": "git add . && git commit -m 'update' && git push",
     "deploy": "npm run build && sls deploy"
   },

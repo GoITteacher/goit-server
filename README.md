@@ -44,6 +44,11 @@ tokens are UUIDs stored in the user record and rotated on every refresh.
 All endpoints are mounted under `/api` when running via Serverless; in
 development they are direct Express routes.
 
+The API is split into authentication-guarded and public surfaces:
+
+- **Authentication + protected resources** – `/auth` controls login/refresh/logout, and `/news`, `/tasks`, `/notes` require a valid `Authorization: Bearer <accessToken>` header.
+- **Public catalog surfaces** – `/todos` and `/public/*` stay open (no bearer token), and the catalog is organized into themed categories.
+
 ---
 
 ### Auth (/auth)
@@ -172,3 +177,194 @@ Protected resource for simple note-taking.
 
 Both tasks and notes endpoints only operate on documents that belong to the
 authenticated user.
+
+---
+
+### Todos (/todos)
+
+Public CRUD surface that is intentionally unauthenticated. Use it for shared
+lists or demo data without any bearer token.
+
+#### Shared schema
+
+Each todo document exposes:
+`title`, `description`, `completed`, `priority` (`low`,`medium`,`high`),
+`dueDate`, `category`, `tags`, plus `createdAt`/`updatedAt`.
+
+#### `GET /todos`
+
+- **Query**:
+  `page`, `perPage`, `sortField`, `sortOrder` (`asc`/`desc`), `completed`,
+  `priority`, `category`, `title`, `tag`, `dueBefore`, `dueAfter`
+- **Response**: `200` `{ pagination metadata, todos: Todo[] }`
+- Filtering respects partial matches (`title`, `category`) and equality for
+  enumerated fields, while `dueBefore`/`dueAfter` allow range queries.
+
+#### `POST /todos`
+
+- **Body**: `{ title: string, description?: string, completed?: boolean, priority?: "low"|"medium"|"high", dueDate?: ISOString, category?: string, tags?: string[] }`
+- **Response**: `201` `{ todo }`
+
+#### `GET /todos/:todoId`
+
+- Returns the todo with the matching ID.
+- **Response**: `200` `{ todo }`
+
+#### `PATCH /todos/:todoId`
+
+- **Body**: any of the fields listed above.
+- **Response**: `200` updated todo.
+
+#### `DELETE /todos/:todoId`
+
+- **Response**: `204`
+
+---
+
+### Public catalog (/public)
+
+All `/public` endpoints are intentionally unauthenticated and expose read/write access to shared catalog data. The catalog is organized into resource-specific categories (News, Songs, Cars, Movies, Students, Lessons) and each category shares the pagination helpers (`page`, `perPage`, `sortField`, `sortOrder`) along with the filters listed per section. Sorting defaults to `createdAt`, and every list response includes pagination metadata (`page`, `perPage`, `totalPages`, `totalItems`, `hasNextPage`, `hasPreviousPage`).
+
+#### `GET /public/news`
+
+- **Filters**: `title`, `category`, `source`, `tags`
+- **Response**: `200` `{ pagination meta, items: CatalogNews[] }`
+
+#### `POST /public/news`
+
+- **Body**: `{ title: string, summary: string, source: string, category: "technology"|"business"|"health"|"lifestyle"|"science"|"entertainment", publishedAt: ISOString, url?: string, tags?: string[] }`
+- **Response**: `201` `{ item: CatalogNews }`
+
+#### `GET /public/news/:newsId`
+
+- **Response**: `200` `{ item: CatalogNews }`
+
+#### `PUT /public/news/:newsId`
+
+- **Body**: same shape as POST (allows partial updates).
+- **Response**: `200` updated `{ item: CatalogNews }`
+
+#### `DELETE /public/news/:newsId`
+
+- **Response**: `204`
+
+#### `GET /public/songs`
+
+- **Filters**: `title`, `artist`, `genre`, `language`, `label`, `releaseYear`
+- **Response**: `200` `{ pagination meta, items: Song[] }`
+
+#### `POST /public/songs`
+
+- **Body**: `{ title: string, artist: string, album?: string, genre: string, releaseYear: number, durationSeconds: number, label?: string, language?: string }`
+- **Response**: `201` `{ item: Song }`
+
+#### `GET /public/songs/:songId`
+
+- **Response**: `200` `{ item: Song }`
+
+#### `PUT /public/songs/:songId`
+
+- **Body**: same as POST (allows partial updates).
+- **Response**: `200` updated `{ item: Song }`
+
+#### `DELETE /public/songs/:songId`
+
+- **Response**: `204`
+
+#### `GET /public/cars`
+
+- **Filters**: `make`, `model`, `color`, `fuelType`, `year`, `price`
+- **Response**: `200` `{ pagination meta, items: Car[] }`
+
+#### `POST /public/cars`
+
+- **Body**: `{ make: string, model: string, year: number, color: string, price: number, mileage?: number, fuelType: "gasoline"|"diesel"|"electric"|"hybrid", description?: string }`
+- **Response**: `201` `{ item: Car }`
+
+#### `GET /public/cars/:carId`
+
+- **Response**: `200` `{ item: Car }`
+
+#### `PUT /public/cars/:carId`
+
+- **Body**: same as POST (allows partial updates).
+- **Response**: `200` updated `{ item: Car }`
+
+#### `DELETE /public/cars/:carId`
+
+- **Response**: `204`
+
+#### `GET /public/movies`
+
+- **Filters**: `title`, `director`, `genre`, `language`, `releaseYear`, `rating`
+- **Response**: `200` `{ pagination meta, items: Movie[] }`
+
+#### `POST /public/movies`
+
+- **Body**: `{ title: string, director: string, genre: string, releaseYear: number, durationMinutes: number, rating?: number, language?: string, summary?: string }`
+- **Response**: `201` `{ item: Movie }`
+
+#### `GET /public/movies/:movieId`
+
+- **Response**: `200` `{ item: Movie }`
+
+#### `PUT /public/movies/:movieId`
+
+- **Body**: same as POST (allows partial updates).
+- **Response**: `200` updated `{ item: Movie }`
+
+#### `DELETE /public/movies/:movieId`
+
+- **Response**: `204`
+
+#### `GET /public/students`
+
+- **Filters**: `firstName`, `lastName`, `major`, `cohortYear`, `gpa`, `enrolled`
+- **Response**: `200` `{ pagination meta, items: Student[] }`
+
+#### `POST /public/students`
+
+- **Body**: `{ firstName: string, lastName: string, major: string, cohortYear: number, gpa?: number, enrolled?: boolean }`
+- **Response**: `201` `{ item: Student }`
+
+#### `GET /public/students/:studentId`
+
+- **Response**: `200` `{ item: Student }`
+
+#### `PUT /public/students/:studentId`
+
+- **Body**: same as POST (allows partial updates).
+- **Response**: `200` updated `{ item: Student }`
+
+#### `DELETE /public/students/:studentId`
+
+- **Response**: `204`
+
+#### `GET /public/lessons`
+
+- **Filters**: `title`, `subject`, `level`, `teacher`, `durationMinutes`
+- **Response**: `200` `{ pagination meta, items: Lesson[] }`
+
+#### `POST /public/lessons`
+
+- **Body**: `{ title: string, subject: string, level?: "beginner"|"intermediate"|"advanced", teacher: string, durationMinutes: number, publishedAt: ISOString, summary?: string }`
+- **Response**: `201` `{ item: Lesson }`
+
+#### `GET /public/lessons/:lessonId`
+
+- **Response**: `200` `{ item: Lesson }`
+
+#### `PUT /public/lessons/:lessonId`
+
+- **Body**: same as POST (allows partial updates).
+- **Response**: `200` updated `{ item: Lesson }`
+
+#### `DELETE /public/lessons/:lessonId`
+
+- **Response**: `204`
+
+---
+
+## Swagger documentation
+
+Visit `GET /docs` to explore the full catalog API through an interactive Swagger UI. The underlying OpenAPI JSON payload is served from `/docs/openapi.json`, which is the same definition that powers the UI.

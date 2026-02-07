@@ -1,4 +1,4 @@
-service: aws-node-express-api
+service: goit-server
 
 frameworkVersion: '4'
 
